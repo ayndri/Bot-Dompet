@@ -1,4 +1,13 @@
-# Dompetku
+<p align="center">
+  <img src="assets/avatar.png" width="120" alt="Logo Dompetku: dompet krem di latar hijau">
+</p>
+
+<h1 align="center">Dompetku</h1>
+
+<p align="center">
+  <a href="https://github.com/ayndri/Bot-Dompet/actions/workflows/test.yml"><img src="https://github.com/ayndri/Bot-Dompet/actions/workflows/test.yml/badge.svg" alt="Status tes"></a>
+  <img src="https://img.shields.io/github/go-mod/go-version/ayndri/Bot-Dompet" alt="Versi Go">
+</p>
 
 **Bot Telegram pencatat pemasukan dan pengeluaran.** Ketik kayak lagi chat,
 `kopi 25rb` atau `gaji 5jt`, dan bot mencatat nominal, jenis, dan kategorinya.
