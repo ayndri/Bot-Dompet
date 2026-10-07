@@ -15,22 +15,9 @@
 Ditulis dengan **Go**, jalan sebagai fungsi serverless di **Vercel**, data di
 **Neon Postgres**.
 
-```
-kamu   kopi 25rb
-bot    💸 Pengeluaran dicatat
-       Rp25.000 · Jajan
-       kopi
-
-kamu   /mingguini
-bot    📊 Minggu ini · 5 Okt – 11 Okt
-       Pemasukan: Rp5.000.000
-       Pengeluaran: Rp100.000
-       Selisih: +Rp4.900.000
-
-       Pengeluaran per kategori
-       • Makan: Rp75.000 (75%)
-       • Jajan: Rp25.000 (25%)
-```
+<p align="center">
+  <img src="assets/chat.png" width="440" alt="Percakapan dengan Dompetku: mencatat kopi 25rb lalu meminta ringkasan minggu ini">
+</p>
 
 ## Fitur
 
