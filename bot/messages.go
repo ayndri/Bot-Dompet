@@ -24,6 +24,7 @@ Awalan <code>+</code> artinya uang masuk, <code>-</code> artinya uang keluar.
 
 <b>Perintah</b>
 /hariini · /mingguini · /bulanini — ringkasan
+/laporan — minggu ini dibanding minggu lalu
 /saldo — total masuk dikurangi keluar
 /riwayat — 10 catatan terakhir
 /batal — hapus catatan terakhir`
@@ -112,7 +113,87 @@ func writeCategories(s *strings.Builder, title string, cats []ledger.CategoryTot
 	}
 	fmt.Fprintf(s, "\n<b>%s</b>\n", title)
 	for _, c := range cats {
-		pct := (c.Total*100 + total/2) / total
-		fmt.Fprintf(s, "• %s: %s (%d%%)\n", html.EscapeString(c.Category), ledger.Rupiah(c.Total), pct)
+		fmt.Fprintf(s, "• %s: %s (%d%%)\n", html.EscapeString(c.Category), ledger.Rupiah(c.Total), percent(c.Total, total))
 	}
+}
+
+func formatWeekly(from, to time.Time, cur, prev []ledger.CategoryTotal) string {
+	var s strings.Builder
+	fmt.Fprintf(&s, "<b>🗓️ Laporan mingguan</b> · %s\n\n", rangeLabel(ThisWeek, from, to))
+
+	in, out, outCats := splitTotals(cur)
+	_, prevOut, prevCats := splitTotals(prev)
+	if in == 0 && out == 0 {
+		s.WriteString("Minggu ini belum ada catatan. Yuk mulai catat lagi, cukup ketik <code>kopi 25rb</code>.")
+		return s.String()
+	}
+
+	diff := ledger.Rupiah(in - out)
+	if in > out {
+		diff = "+" + diff
+	}
+	fmt.Fprintf(&s, "Pemasukan: <b>%s</b>\nPengeluaran: <b>%s</b>\nSelisih: <b>%s</b>\n",
+		ledger.Rupiah(in), ledger.Rupiah(out), diff)
+
+	if out == 0 {
+		return s.String() + "\nNggak ada pengeluaran sama sekali minggu ini 👏"
+	}
+
+	// Totals sudah terurut dari yang terbesar, jadi elemen pertama paling boros.
+	top := outCats[0]
+	fmt.Fprintf(&s, "\n🔥 Paling boros: <b>%s</b> %s (%d%% pengeluaran)\n",
+		html.EscapeString(top.Category), ledger.Rupiah(top.Total), percent(top.Total, out))
+
+	if prevOut == 0 {
+		s.WriteString("Minggu lalu belum ada pengeluaran, jadi belum bisa dibandingkan.")
+		return s.String()
+	}
+
+	change := out - prevOut
+	switch {
+	case change > 0:
+		fmt.Fprintf(&s, "📈 Pengeluaran naik %d%% dari minggu lalu (+%s)\n", percent(change, prevOut), ledger.Rupiah(change))
+	case change < 0:
+		fmt.Fprintf(&s, "📉 Pengeluaran turun %d%% dari minggu lalu (−%s)\n", percent(-change, prevOut), ledger.Rupiah(-change))
+	default:
+		s.WriteString("Pengeluaran sama persis dengan minggu lalu.\n")
+	}
+
+	if cat, up := biggestIncrease(outCats, prevCats); up > 0 {
+		fmt.Fprintf(&s, "⬆️ Naik paling banyak: <b>%s</b> +%s\n", html.EscapeString(cat), ledger.Rupiah(up))
+	}
+	return strings.TrimRight(s.String(), "\n")
+}
+
+// splitTotals memisahkan total pemasukan, total pengeluaran, dan daftar
+// kategori pengeluaran (urutan dari input dipertahankan).
+func splitTotals(totals []ledger.CategoryTotal) (in, out int64, outCats []ledger.CategoryTotal) {
+	for _, t := range totals {
+		if t.Kind == ledger.Income {
+			in += t.Total
+		} else {
+			out += t.Total
+			outCats = append(outCats, t)
+		}
+	}
+	return in, out, outCats
+}
+
+func biggestIncrease(cur, prev []ledger.CategoryTotal) (string, int64) {
+	before := map[string]int64{}
+	for _, c := range prev {
+		before[c.Category] = c.Total
+	}
+	var name string
+	var best int64
+	for _, c := range cur {
+		if up := c.Total - before[c.Category]; up > best {
+			name, best = c.Category, up
+		}
+	}
+	return name, best
+}
+
+func percent(part, whole int64) int64 {
+	return (part*100 + whole/2) / whole
 }

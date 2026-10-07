@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ayndri/dompetku/bot"
 	"github.com/ayndri/dompetku/store"
@@ -17,8 +18,10 @@ import (
 )
 
 type Config struct {
-	BotToken       string
-	WebhookSecret  string
+	BotToken      string
+	WebhookSecret string
+	// CronSecret dikirim Vercel Cron sebagai "Authorization: Bearer <secret>".
+	CronSecret     string
 	DatabaseURL    string
 	AllowedChatIDs map[int64]bool
 }
@@ -27,6 +30,7 @@ func ConfigFromEnv() (Config, error) {
 	cfg := Config{
 		BotToken:      os.Getenv("TELEGRAM_BOT_TOKEN"),
 		WebhookSecret: os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
+		CronSecret:    os.Getenv("CRON_SECRET"),
 		DatabaseURL:   os.Getenv("DATABASE_URL"),
 	}
 	if cfg.BotToken == "" {
@@ -60,6 +64,7 @@ func parseChatIDs(s string) (map[int64]bool, error) {
 }
 
 type App struct {
+	Config   Config
 	Bot      *bot.Bot
 	Telegram *telegram.Client
 	Store    *store.Store
@@ -72,10 +77,32 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	tg := telegram.New(cfg.BotToken)
 	return &App{
+		Config:   cfg,
 		Bot:      &bot.Bot{Store: st, Sender: tg, Allowed: cfg.AllowedChatIDs},
 		Telegram: tg,
 		Store:    st,
 	}, nil
+}
+
+var (
+	defaultOnce sync.Once
+	defaultApp  *App
+	defaultErr  error
+)
+
+// Default merakit App dari env sekali per instance serverless, lalu dipakai
+// ulang selama instance masih hangat supaya koneksi database tidak dibuka
+// di setiap request.
+func Default() (*App, error) {
+	defaultOnce.Do(func() {
+		cfg, err := ConfigFromEnv()
+		if err != nil {
+			defaultErr = err
+			return
+		}
+		defaultApp, defaultErr = New(context.Background(), cfg)
+	})
+	return defaultApp, defaultErr
 }
 
 func (a *App) Close() { a.Store.Close() }

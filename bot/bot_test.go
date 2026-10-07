@@ -76,6 +76,15 @@ func (f *fakeStore) Balance(_ context.Context, _ int64) (int64, error) {
 	return v, nil
 }
 
+func (f *fakeStore) ActiveChats(_ context.Context, since time.Time) ([]int64, error) {
+	for _, tx := range f.txs {
+		if !tx.CreatedAt.Before(since) {
+			return []int64{42}, nil
+		}
+	}
+	return nil, nil
+}
+
 type fakeSender struct{ sent []string }
 
 func (f *fakeSender) SendMessage(_ context.Context, _ int64, text string) error {
@@ -175,5 +184,66 @@ func TestWeekRangeStartsMonday(t *testing.T) {
 	}
 	if want := time.Date(2026, 10, 12, 0, 0, 0, 0, WIB); !to.Equal(want) {
 		t.Errorf("akhir minggu %v, ingin %v", to, want)
+	}
+}
+
+// addAt menaruh transaksi langsung di waktu tertentu, misalnya minggu lalu.
+func addAt(st *fakeStore, at time.Time, text string) {
+	e, err := ledger.Parse(text)
+	if err != nil {
+		panic(err)
+	}
+	st.txs = append(st.txs, ledger.Tx{Entry: e, ID: int64(len(st.txs) + 1), CreatedAt: at})
+}
+
+func TestWeeklyReportComparesWithLastWeek(t *testing.T) {
+	b, st, snd := newTestBot()
+	lastWeek := testNow.AddDate(0, 0, -7)
+	addAt(st, lastWeek, "makan 100rb")
+	addAt(st, lastWeek, "kopi 20rb")
+	addAt(st, testNow, "gaji 5jt")
+	addAt(st, testNow, "makan 90rb")
+	addAt(st, testNow, "kopi 60rb")
+
+	send(t, b, 1, "/laporan")
+	got := last(snd)
+	for _, want := range []string{
+		"Laporan mingguan</b> · 5 Okt – 11 Okt",
+		"Pengeluaran: <b>Rp150.000</b>",
+		"Paling boros: <b>Makan</b> Rp90.000 (60% pengeluaran)",
+		"Pengeluaran naik 25% dari minggu lalu (+Rp30.000)",
+		"Naik paling banyak: <b>Jajan</b> +Rp40.000",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("laporan tidak memuat %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestWeeklyReportWithoutLastWeek(t *testing.T) {
+	b, st, snd := newTestBot()
+	addAt(st, testNow, "kopi 25rb")
+	send(t, b, 1, "/laporan")
+	if got := last(snd); !strings.Contains(got, "belum bisa dibandingkan") {
+		t.Errorf("laporan tanpa data minggu lalu:\n%s", got)
+	}
+}
+
+func TestSendWeeklyReports(t *testing.T) {
+	b, st, snd := newTestBot()
+
+	if n, err := b.SendWeeklyReports(context.Background()); n != 0 || err != nil {
+		t.Fatalf("tanpa chat aktif: terkirim %d, err %v", n, err)
+	}
+
+	addAt(st, testNow, "kopi 25rb")
+	n, err := b.SendWeeklyReports(context.Background())
+	if n != 1 || err != nil || !strings.Contains(last(snd), "Laporan mingguan") {
+		t.Fatalf("terkirim %d, err %v, pesan %v", n, err, snd.sent)
+	}
+
+	b.Allowed = map[int64]bool{1: true} // chat 42 tidak diizinkan lagi
+	if n, _ := b.SendWeeklyReports(context.Background()); n != 0 {
+		t.Errorf("chat di luar allowlist tetap dikirimi laporan")
 	}
 }

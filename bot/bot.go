@@ -20,6 +20,7 @@ type Store interface {
 	Totals(ctx context.Context, chatID int64, from, to time.Time) ([]ledger.CategoryTotal, error)
 	Recent(ctx context.Context, chatID int64, limit int) ([]ledger.Tx, error)
 	Balance(ctx context.Context, chatID int64) (int64, error)
+	ActiveChats(ctx context.Context, since time.Time) ([]int64, error)
 }
 
 type Sender interface {
@@ -40,6 +41,7 @@ var Commands = []telegram.BotCommand{
 	{Command: "hariini", Description: "Ringkasan hari ini"},
 	{Command: "mingguini", Description: "Ringkasan minggu ini"},
 	{Command: "bulanini", Description: "Ringkasan bulan ini"},
+	{Command: "laporan", Description: "Laporan minggu ini vs minggu lalu"},
 	{Command: "saldo", Description: "Pemasukan dikurangi pengeluaran sejak awal"},
 	{Command: "riwayat", Description: "10 catatan terakhir"},
 	{Command: "batal", Description: "Hapus catatan terakhir"},
@@ -87,6 +89,8 @@ func (b *Bot) respond(ctx context.Context, updateID, chatID int64, text string) 
 			return b.summary(ctx, chatID, ThisWeek)
 		case "/bulanini":
 			return b.summary(ctx, chatID, ThisMonth)
+		case "/laporan":
+			return b.weeklyReport(ctx, chatID)
 		case "/saldo":
 			return b.balance(ctx, chatID)
 		case "/riwayat":
@@ -122,6 +126,47 @@ func (b *Bot) summary(ctx context.Context, chatID int64, p Period) (string, erro
 		return "", err
 	}
 	return formatSummary(p, from, to, totals), nil
+}
+
+func (b *Bot) weeklyReport(ctx context.Context, chatID int64) (string, error) {
+	from, to := ThisWeek.Range(b.now())
+	cur, err := b.Store.Totals(ctx, chatID, from, to)
+	if err != nil {
+		return "", err
+	}
+	prev, err := b.Store.Totals(ctx, chatID, from.AddDate(0, 0, -7), from)
+	if err != nil {
+		return "", err
+	}
+	return formatWeekly(from, to, cur, prev), nil
+}
+
+// SendWeeklyReports mengirim laporan ke setiap chat yang mencatat sesuatu
+// dalam dua minggu terakhir. Satu chat gagal tidak menghentikan yang lain.
+func (b *Bot) SendWeeklyReports(ctx context.Context) (int, error) {
+	from, _ := ThisWeek.Range(b.now())
+	chats, err := b.Store.ActiveChats(ctx, from.AddDate(0, 0, -7))
+	if err != nil {
+		return 0, err
+	}
+
+	sent := 0
+	var errs []error
+	for _, chatID := range chats {
+		if len(b.Allowed) > 0 && !b.Allowed[chatID] {
+			continue
+		}
+		msg, err := b.weeklyReport(ctx, chatID)
+		if err == nil {
+			err = b.Sender.SendMessage(ctx, chatID, msg)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("chat %d: %w", chatID, err))
+			continue
+		}
+		sent++
+	}
+	return sent, errors.Join(errs...)
 }
 
 func (b *Bot) balance(ctx context.Context, chatID int64) (string, error) {

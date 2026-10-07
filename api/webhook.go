@@ -1,44 +1,19 @@
-// Package handler adalah fungsi serverless Vercel di /api/webhook.
-// Telegram memanggil URL ini setiap ada pesan masuk ke bot.
+// Package handler berisi fungsi serverless Vercel. File ini melayani
+// /api/webhook, yang dipanggil Telegram setiap ada pesan masuk ke bot.
 package handler
 
 import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"io"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/ayndri/dompetku/app"
 	"github.com/ayndri/dompetku/telegram"
 )
-
-// Disiapkan sekali per instance, lalu dipakai ulang selama instance masih
-// hangat, supaya tidak membuka koneksi database di setiap pesan.
-var (
-	initOnce sync.Once
-	svc      *app.App
-	secret   string
-	initErr  error
-)
-
-func setup() {
-	cfg, err := app.ConfigFromEnv()
-	if err != nil {
-		initErr = err
-		return
-	}
-	if cfg.WebhookSecret == "" {
-		initErr = errors.New("TELEGRAM_WEBHOOK_SECRET belum diisi")
-		return
-	}
-	secret = cfg.WebhookSecret
-	svc, initErr = app.New(context.Background(), cfg)
-}
 
 func Handler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -46,9 +21,15 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	initOnce.Do(setup)
-	if initErr != nil {
-		log.Printf("init: %v", initErr)
+	a, err := app.Default()
+	if err != nil {
+		log.Printf("init: %v", err)
+		http.Error(w, "server belum siap", http.StatusInternalServerError)
+		return
+	}
+	secret := a.Config.WebhookSecret
+	if secret == "" {
+		log.Print("TELEGRAM_WEBHOOK_SECRET belum diisi")
 		http.Error(w, "server belum siap", http.StatusInternalServerError)
 		return
 	}
@@ -70,7 +51,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 9*time.Second)
 	defer cancel()
-	if err := svc.Bot.HandleUpdate(ctx, u); err != nil {
+	if err := a.Bot.HandleUpdate(ctx, u); err != nil {
 		log.Printf("update %d: %v", u.UpdateID, err)
 	}
 	w.WriteHeader(http.StatusOK)

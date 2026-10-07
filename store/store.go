@@ -121,6 +121,16 @@ func (s *Store) Recent(ctx context.Context, chatID int64, limit int) ([]ledger.T
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (ledger.Tx, error) { return scanTx(row) })
 }
 
+// ActiveChats mengembalikan chat yang punya catatan sejak waktu tertentu.
+func (s *Store) ActiveChats(ctx context.Context, since time.Time) ([]int64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT chat_id FROM transactions WHERE created_at >= $1`, since)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[int64])
+}
+
 // Balance adalah total pemasukan dikurangi pengeluaran sejak awal.
 func (s *Store) Balance(ctx context.Context, chatID int64) (int64, error) {
 	var v int64

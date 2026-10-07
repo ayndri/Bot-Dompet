@@ -27,6 +27,8 @@ Ditulis dengan **Go**, jalan sebagai fungsi serverless di **Vercel**, data di
   `grab`, `bensin`, `parkir` masuk Transport, dan seterusnya.
   Awalan `+` atau `-` memaksa jenisnya.
 - **Ringkasan** `/hariini`, `/mingguini`, `/bulanini`, plus `/saldo` dan `/riwayat`.
+- **Laporan mingguan otomatis** tiap Minggu malam lewat Vercel Cron: kategori paling
+  boros dan perbandingan dengan minggu lalu. Bisa juga diminta kapan saja dengan `/laporan`.
 - **`/batal`** menghapus catatan terakhir kalau salah ketik.
 - **Tidak dobel.** Telegram kadang mengirim ulang pesan yang sama; setiap
   `update_id` hanya dicatat sekali (unique constraint di database).
@@ -52,7 +54,7 @@ Telegram ──POST──▶ api/webhook.go  (Vercel, cek secret header)
 | `bot/` | Logika percakapan. Bergantung pada interface `Store` dan `Sender`, jadi bisa dites tanpa database dan tanpa Telegram. |
 | `store/` | Query Postgres dengan `pgx`. Skema di `store/schema.sql`. |
 | `telegram/` | Klien Bot API kecil, tanpa library pihak ketiga. |
-| `api/` | Entry point serverless Vercel. |
+| `api/` | Fungsi serverless Vercel: `webhook.go` untuk pesan Telegram, `weekly.go` untuk cron laporan mingguan. |
 | `cmd/` | `dev` (jalan lokal), `migrate` (buat tabel), `setwebhook` (daftarkan URL). |
 
 ## Menjalankan di laptop
@@ -71,7 +73,7 @@ go test ./...
 
 1. Push repo ke GitHub, lalu import di Vercel (framework: **Other**).
 2. Isi Environment Variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`,
-   `DATABASE_URL`, dan opsional `ALLOWED_CHAT_IDS`.
+   `CRON_SECRET`, `DATABASE_URL`, dan opsional `ALLOWED_CHAT_IDS`.
 3. Setelah deploy, daftarkan webhook dari laptop (pakai token bot produksi):
 
    ```bash
@@ -80,7 +82,7 @@ go test ./...
 
 ## Rencana berikutnya
 
-- [ ] Laporan mingguan otomatis tiap Minggu malam (cron)
+- [x] Laporan mingguan otomatis tiap Minggu malam (cron)
 - [ ] Grafik pengeluaran per kategori dikirim sebagai gambar
 - [ ] Batas budget per kategori dengan peringatan di 80%
 - [ ] Tombol pilihan kategori saat bot tidak yakin
