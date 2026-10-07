@@ -3,6 +3,6 @@
   "framework": null,
   "regions": ["sin1"],
   "crons": [
-    { "path": "/api/weekly", "schedule": "0 13 * * 0" }
+    { "path": "/api/cron", "schedule": "0 14 * * *" }
   ]
 }

@@ -11,9 +11,9 @@ import (
 	"github.com/ayndri/dompetku/app"
 )
 
-// Weekly melayani /api/weekly, dipanggil Vercel Cron tiap Minggu malam
-// (jadwal di vercel.json) untuk mengirim laporan mingguan.
-func Weekly(w http.ResponseWriter, r *http.Request) {
+// Cron melayani /api/cron, dipanggil Vercel Cron tiap malam pukul 21.00 WIB
+// (jadwal di vercel.json): pengingat harian, atau laporan mingguan di hari Minggu.
+func Cron(w http.ResponseWriter, r *http.Request) {
 	a, err := app.Default()
 	if err != nil {
 		log.Printf("init: %v", err)
@@ -28,7 +28,7 @@ func Weekly(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Vercel menyertakan CRON_SECRET di header ini. Tanpa cek, siapa pun bisa
-	// memicu kiriman laporan berkali-kali.
+	// memicu kiriman pesan berkali-kali.
 	got := r.Header.Get("Authorization")
 	if subtle.ConstantTimeCompare([]byte(got), []byte("Bearer "+secret)) != 1 {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -37,9 +37,9 @@ func Weekly(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 50*time.Second)
 	defer cancel()
-	sent, err := a.Bot.SendWeeklyReports(ctx)
+	sent, err := a.Bot.RunDaily(ctx)
 	if err != nil {
-		log.Printf("laporan mingguan: %v", err)
+		log.Printf("cron harian: %v", err)
 		http.Error(w, fmt.Sprintf("terkirim ke %d chat, sebagian gagal", sent), http.StatusInternalServerError)
 		return
 	}

@@ -15,16 +15,25 @@ import (
 )
 
 type Store interface {
-	Add(ctx context.Context, chatID, updateID int64, e ledger.Entry) (ledger.Tx, error)
+	Add(ctx context.Context, chatID, updateID int64, txs []ledger.Tx) ([]ledger.Tx, error)
+	GetTx(ctx context.Context, chatID, id int64) (ledger.Tx, bool, error)
+	SetCategory(ctx context.Context, chatID, id int64, category string) (ledger.Tx, bool, error)
 	DeleteLast(ctx context.Context, chatID int64) (ledger.Tx, bool, error)
 	Totals(ctx context.Context, chatID int64, from, to time.Time) ([]ledger.CategoryTotal, error)
 	Recent(ctx context.Context, chatID int64, limit int) ([]ledger.Tx, error)
 	Balance(ctx context.Context, chatID int64) (int64, error)
 	ActiveChats(ctx context.Context, since time.Time) ([]int64, error)
+	LearnRule(ctx context.Context, chatID int64, kind ledger.Kind, keyword, category string) error
+	Rules(ctx context.Context, chatID int64) (ledger.Learned, error)
+	SetBudget(ctx context.Context, chatID int64, b ledger.Budget) error
+	DeleteBudget(ctx context.Context, chatID int64, category string) (bool, error)
+	Budgets(ctx context.Context, chatID int64) ([]ledger.Budget, error)
 }
 
 type Sender interface {
-	SendMessage(ctx context.Context, chatID int64, text string) error
+	SendMessage(ctx context.Context, chatID int64, text string, kb *telegram.InlineKeyboardMarkup) error
+	EditMessage(ctx context.Context, chatID, messageID int64, text string, kb *telegram.InlineKeyboardMarkup) error
+	AnswerCallback(ctx context.Context, callbackID, text string) error
 }
 
 type Bot struct {
@@ -36,12 +45,21 @@ type Bot struct {
 	Now func() time.Time
 }
 
+// Reply adalah balasan untuk satu pesan, boleh dengan tombol.
+type Reply struct {
+	Text     string
+	Keyboard *telegram.InlineKeyboardMarkup
+}
+
+func text(s string) Reply { return Reply{Text: s} }
+
 // Commands ditampilkan sebagai menu "/" di Telegram.
 var Commands = []telegram.BotCommand{
 	{Command: "hariini", Description: "Ringkasan hari ini"},
 	{Command: "mingguini", Description: "Ringkasan minggu ini"},
 	{Command: "bulanini", Description: "Ringkasan bulan ini"},
 	{Command: "laporan", Description: "Laporan minggu ini vs minggu lalu"},
+	{Command: "budget", Description: "Lihat atau atur budget bulanan"},
 	{Command: "saldo", Description: "Pemasukan dikurangi pengeluaran sejak awal"},
 	{Command: "riwayat", Description: "10 catatan terakhir"},
 	{Command: "batal", Description: "Hapus catatan terakhir"},
@@ -50,72 +68,79 @@ var Commands = []telegram.BotCommand{
 
 func (b *Bot) now() time.Time {
 	if b.Now != nil {
-		return b.Now()
+		return b.Now().In(WIB)
 	}
-	return time.Now()
+	return time.Now().In(WIB)
+}
+
+func (b *Bot) allowed(chatID int64) bool {
+	return len(b.Allowed) == 0 || b.Allowed[chatID]
 }
 
 func (b *Bot) HandleUpdate(ctx context.Context, u telegram.Update) error {
-	m := u.Message
-	if m == nil || strings.TrimSpace(m.Text) == "" {
-		return nil
+	switch {
+	case u.CallbackQuery != nil:
+		return b.handleCallback(ctx, u.CallbackQuery)
+	case u.Message != nil && strings.TrimSpace(u.Message.Text) != "":
+		return b.handleMessage(ctx, u.UpdateID, u.Message)
 	}
+	return nil
+}
+
+func (b *Bot) handleMessage(ctx context.Context, updateID int64, m *telegram.Message) error {
 	chatID := m.Chat.ID
-
-	if len(b.Allowed) > 0 && !b.Allowed[chatID] {
+	if !b.allowed(chatID) {
 		return b.Sender.SendMessage(ctx, chatID,
-			fmt.Sprintf("Maaf, bot ini pribadi. ID chat kamu: <code>%d</code>", chatID))
+			fmt.Sprintf("Maaf, bot ini pribadi. ID chat kamu: <code>%d</code>", chatID), nil)
 	}
 
-	reply, err := b.respond(ctx, u.UpdateID, chatID, strings.TrimSpace(m.Text))
+	reply, err := b.respond(ctx, updateID, chatID, strings.TrimSpace(m.Text))
 	if errors.Is(err, ledger.ErrDuplicate) {
 		return nil // sudah dibalas waktu kiriman pertama
 	}
 	if err != nil {
-		log.Printf("update %d: %v", u.UpdateID, err)
-		reply = "Waduh, lagi ada gangguan. Coba kirim lagi sebentar ya."
+		log.Printf("update %d: %v", updateID, err)
+		reply = text("Waduh, lagi ada gangguan. Coba kirim lagi sebentar ya.")
 	}
-	return b.Sender.SendMessage(ctx, chatID, reply)
+	return b.Sender.SendMessage(ctx, chatID, reply.Text, reply.Keyboard)
 }
 
-func (b *Bot) respond(ctx context.Context, updateID, chatID int64, text string) (string, error) {
-	if strings.HasPrefix(text, "/") {
-		switch command(text) {
-		case "/start", "/bantuan", "/help":
-			return helpText, nil
-		case "/hariini":
-			return b.summary(ctx, chatID, Today)
-		case "/mingguini":
-			return b.summary(ctx, chatID, ThisWeek)
-		case "/bulanini":
-			return b.summary(ctx, chatID, ThisMonth)
-		case "/laporan":
-			return b.weeklyReport(ctx, chatID)
-		case "/saldo":
-			return b.balance(ctx, chatID)
-		case "/riwayat":
-			return b.history(ctx, chatID)
-		case "/batal":
-			return b.undo(ctx, chatID)
-		default:
-			return "Perintah itu belum ada. Ketik /bantuan buat lihat daftarnya.", nil
-		}
+func (b *Bot) respond(ctx context.Context, updateID, chatID int64, msg string) (Reply, error) {
+	if !strings.HasPrefix(msg, "/") {
+		return b.record(ctx, updateID, chatID, msg)
 	}
 
-	entry, err := ledger.Parse(text)
-	if err != nil {
-		return parseHint, nil
+	fields := strings.Fields(msg)
+	var s string
+	var err error
+	switch command(fields[0]) {
+	case "/start", "/bantuan", "/help":
+		s = helpText
+	case "/hariini":
+		s, err = b.summary(ctx, chatID, Today)
+	case "/mingguini":
+		s, err = b.summary(ctx, chatID, ThisWeek)
+	case "/bulanini":
+		s, err = b.summary(ctx, chatID, ThisMonth)
+	case "/laporan":
+		s, err = b.weeklyReport(ctx, chatID)
+	case "/budget":
+		s, err = b.budget(ctx, chatID, fields[1:])
+	case "/saldo":
+		s, err = b.balance(ctx, chatID)
+	case "/riwayat":
+		s, err = b.history(ctx, chatID)
+	case "/batal":
+		s, err = b.undo(ctx, chatID)
+	default:
+		s = "Perintah itu belum ada. Ketik /bantuan buat lihat daftarnya."
 	}
-	tx, err := b.Store.Add(ctx, chatID, updateID, entry)
-	if err != nil {
-		return "", err
-	}
-	return formatAdded(tx), nil
+	return text(s), err
 }
 
-// command mengubah "/HariIni@dompetku_bot besok" menjadi "/hariini".
-func command(text string) string {
-	cmd, _, _ := strings.Cut(strings.Fields(text)[0], "@")
+// command mengubah "/HariIni@dompetku_bot" menjadi "/hariini".
+func command(word string) string {
+	cmd, _, _ := strings.Cut(word, "@")
 	return strings.ToLower(cmd)
 }
 
@@ -139,34 +164,6 @@ func (b *Bot) weeklyReport(ctx context.Context, chatID int64) (string, error) {
 		return "", err
 	}
 	return formatWeekly(from, to, cur, prev), nil
-}
-
-// SendWeeklyReports mengirim laporan ke setiap chat yang mencatat sesuatu
-// dalam dua minggu terakhir. Satu chat gagal tidak menghentikan yang lain.
-func (b *Bot) SendWeeklyReports(ctx context.Context) (int, error) {
-	from, _ := ThisWeek.Range(b.now())
-	chats, err := b.Store.ActiveChats(ctx, from.AddDate(0, 0, -7))
-	if err != nil {
-		return 0, err
-	}
-
-	sent := 0
-	var errs []error
-	for _, chatID := range chats {
-		if len(b.Allowed) > 0 && !b.Allowed[chatID] {
-			continue
-		}
-		msg, err := b.weeklyReport(ctx, chatID)
-		if err == nil {
-			err = b.Sender.SendMessage(ctx, chatID, msg)
-		}
-		if err != nil {
-			errs = append(errs, fmt.Errorf("chat %d: %w", chatID, err))
-			continue
-		}
-		sent++
-	}
-	return sent, errors.Join(errs...)
 }
 
 func (b *Bot) balance(ctx context.Context, chatID int64) (string, error) {

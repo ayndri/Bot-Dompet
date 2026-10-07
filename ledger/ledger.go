@@ -45,3 +45,9 @@ type CategoryTotal struct {
 
 // ErrDuplicate dikembalikan saat Telegram mengirim ulang update yang sama.
 var ErrDuplicate = errors.New("update sudah pernah diproses")
+
+// Budget adalah batas pengeluaran bulanan untuk satu kategori.
+type Budget struct {
+	Category string
+	Amount   int64
+}

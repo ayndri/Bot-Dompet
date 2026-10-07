@@ -70,3 +70,63 @@ func Categorize(kind Kind, note string) string {
 	}
 	return Uncategorized
 }
+
+// Categories mengembalikan semua pilihan kategori untuk satu jenis transaksi,
+// dipakai untuk tombol "Ganti kategori" dan perintah /budget.
+func Categories(kind Kind) []string {
+	rules := expenseRules
+	if kind == Income {
+		rules = incomeRules
+	}
+	names := make([]string, 0, len(rules)+1)
+	for _, r := range rules {
+		names = append(names, r.name)
+	}
+	return append(names, Uncategorized)
+}
+
+// FindCategory mencocokkan nama kategori tanpa peduli huruf besar-kecil.
+func FindCategory(kind Kind, name string) (string, bool) {
+	for _, c := range Categories(kind) {
+		if strings.EqualFold(c, name) {
+			return c, true
+		}
+	}
+	return "", false
+}
+
+// Keyword menormalkan catatan menjadi kunci aturan yang dipelajari:
+// huruf kecil, tanpa tanda baca, tanpa angka lepas ("2 Kopi!" jadi "kopi").
+func Keyword(note string) string {
+	var ws []string
+	for _, w := range words(note) {
+		if strings.Trim(w, "0123456789") != "" {
+			ws = append(ws, w)
+		}
+	}
+	return strings.Join(ws, " ")
+}
+
+// Learned berisi kategori yang diajarkan pengguna lewat tombol
+// "Ganti kategori", dikelompokkan per jenis lalu per kata kunci.
+type Learned map[Kind]map[string]string
+
+// Lookup mencari kategori yang pernah diajarkan. Catatan yang sama persis
+// menang; selain itu, aturan satu kata berlaku untuk catatan yang memuat
+// kata itu ("laundry" juga mengenai "laundry kiloan").
+func (l Learned) Lookup(kind Kind, note string) (string, bool) {
+	rules := l[kind]
+	if len(rules) == 0 {
+		return "", false
+	}
+	kw := Keyword(note)
+	if c, ok := rules[kw]; ok {
+		return c, true
+	}
+	for _, w := range strings.Fields(kw) {
+		if c, ok := rules[w]; ok {
+			return c, true
+		}
+	}
+	return "", false
+}

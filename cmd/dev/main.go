@@ -54,8 +54,11 @@ func main() {
 		}
 		for _, u := range updates {
 			offset = u.UpdateID + 1
-			if u.Message != nil {
+			switch {
+			case u.Message != nil:
 				log.Printf("pesan dari chat %d: %q", u.Message.Chat.ID, u.Message.Text)
+			case u.CallbackQuery != nil:
+				log.Printf("tombol ditekan: %q", u.CallbackQuery.Data)
 			}
 			if err := a.Bot.HandleUpdate(ctx, u); err != nil {
 				log.Printf("update %d: %v", u.UpdateID, err)

@@ -26,12 +26,22 @@ Ditulis dengan **Go**, jalan sebagai fungsi serverless di **Vercel**, data di
 - **Jenis dan kategori otomatis.** `gaji`, `bonus`, `refund` dianggap pemasukan.
   `grab`, `bensin`, `parkir` masuk Transport, dan seterusnya.
   Awalan `+` atau `-` memaksa jenisnya.
+- **Kategori yang belajar.** Tombol *Ganti kategori* di bawah setiap catatan.
+  Pilihan pengguna disimpan sebagai aturan per chat, jadi `laundry` yang sekali
+  dipindah ke Tagihan akan otomatis masuk Tagihan berikutnya.
+- **Catat yang kelupaan.** `kemarin bakso 15rb`, `senin bensin 30rb`, `5/10 parkir 5rb`.
+- **Banyak sekaligus.** Satu pesan, satu baris satu catatan, disimpan dalam satu
+  transaksi database. Baris yang isinya cuma `kemarin` berlaku untuk baris di bawahnya.
+- **Budget bulanan per kategori.** `/budget jajan 300rb`; bot memberi peringatan
+  saat pemakaian melewati 80% dan 100%.
 - **Ringkasan** `/hariini`, `/mingguini`, `/bulanini`, plus `/saldo` dan `/riwayat`.
-- **Laporan mingguan otomatis** tiap Minggu malam lewat Vercel Cron: kategori paling
-  boros dan perbandingan dengan minggu lalu. Bisa juga diminta kapan saja dengan `/laporan`.
+- **Pengingat dan laporan otomatis.** Satu Vercel Cron tiap 21.00 WIB: mengingatkan
+  kalau hari itu belum ada catatan, dan di hari Minggu mengirim laporan mingguan
+  (kategori paling boros, perbandingan dengan minggu lalu). Laporan juga bisa
+  diminta kapan saja dengan `/laporan`.
 - **`/batal`** menghapus catatan terakhir kalau salah ketik.
 - **Tidak dobel.** Telegram kadang mengirim ulang pesan yang sama; setiap
-  `update_id` hanya dicatat sekali (unique constraint di database).
+  pasangan `update_id` dan nomor baris hanya dicatat sekali (unique index).
 - **Bisa dibuat pribadi** lewat `ALLOWED_CHAT_IDS`.
 
 ## Arsitektur
@@ -54,7 +64,7 @@ Telegram ──POST──▶ api/webhook.go  (Vercel, cek secret header)
 | `bot/` | Logika percakapan. Bergantung pada interface `Store` dan `Sender`, jadi bisa dites tanpa database dan tanpa Telegram. |
 | `store/` | Query Postgres dengan `pgx`. Skema di `store/schema.sql`. |
 | `telegram/` | Klien Bot API kecil, tanpa library pihak ketiga. |
-| `api/` | Fungsi serverless Vercel: `webhook.go` untuk pesan Telegram, `weekly.go` untuk cron laporan mingguan. |
+| `api/` | Fungsi serverless Vercel: `webhook.go` untuk pesan Telegram, `cron.go` untuk pengingat harian dan laporan mingguan. |
 | `cmd/` | `dev` (jalan lokal), `migrate` (buat tabel), `setwebhook` (daftarkan URL). |
 
 ## Menjalankan di laptop
@@ -82,7 +92,6 @@ go test ./...
 
 ## Rencana berikutnya
 
-- [x] Laporan mingguan otomatis tiap Minggu malam (cron)
 - [ ] Grafik pengeluaran per kategori dikirim sebagai gambar
-- [ ] Batas budget per kategori dengan peringatan di 80%
-- [ ] Tombol pilihan kategori saat bot tidak yakin
+- [ ] Export catatan ke CSV
+- [ ] `/pengingat off` untuk mematikan pengingat harian

@@ -22,12 +22,27 @@ Ketik aja kayak lagi chat, nanti aku catat.
 <code>+freelance desain 1,5jt</code>
 Awalan <code>+</code> artinya uang masuk, <code>-</code> artinya uang keluar.
 
+<b>Lupa nyatat?</b>
+<code>kemarin bakso 15rb</code>
+<code>senin bensin 30rb</code>
+<code>5/10 parkir 5rb</code>
+
+<b>Banyak sekaligus</b>, satu baris satu catatan:
+<code>kopi 25rb
+parkir 5rb
+makan 30rb</code>
+
+Kategorinya salah? Tekan <b>✏️ Ganti kategori</b>. Aku bakal ingat buat lain kali.
+
 <b>Perintah</b>
 /hariini · /mingguini · /bulanini — ringkasan
 /laporan — minggu ini dibanding minggu lalu
+/budget — batas pengeluaran bulanan per kategori
 /saldo — total masuk dikurangi keluar
 /riwayat — 10 catatan terakhir
-/batal — hapus catatan terakhir`
+/batal — hapus catatan terakhir
+
+Tiap jam 9 malam aku ngingetin kalau hari itu belum ada catatan, dan tiap Minggu malam aku kirim laporan mingguan.`
 
 const parseHint = `Hmm, nominalnya nggak ketemu 🤔
 Coba tulis kayak gini: <code>kopi 25rb</code>, <code>bensin 30.000</code>, atau <code>+gaji 5jt</code>.`
@@ -39,14 +54,62 @@ func kindIcon(k ledger.Kind) string {
 	return "💸"
 }
 
-func formatAdded(tx ledger.Tx) string {
+var weekdayNames = [...]string{"Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"}
+
+// dayLabel mengembalikan "" untuk hari ini, selain itu misalnya
+// "Kemarin, 6 Okt" atau "Senin, 5 Okt".
+func dayLabel(at, today time.Time) string {
+	day := startOfDay(at)
+	switch {
+	case day.Equal(today):
+		return ""
+	case day.Equal(today.AddDate(0, 0, -1)):
+		return "Kemarin, " + shortDate(day)
+	default:
+		return weekdayNames[day.Weekday()] + ", " + shortDate(day)
+	}
+}
+
+func formatAdded(tx ledger.Tx, today time.Time) string {
 	var s strings.Builder
 	fmt.Fprintf(&s, "%s %s dicatat\n<b>%s</b> · %s",
 		kindIcon(tx.Kind), tx.Kind.Label(), ledger.Rupiah(tx.Amount), html.EscapeString(tx.Category))
 	if tx.Note != "" {
 		fmt.Fprintf(&s, "\n<i>%s</i>", html.EscapeString(tx.Note))
 	}
-	s.WriteString("\n\nSalah? Ketik /batal")
+	if d := dayLabel(tx.CreatedAt, today); d != "" {
+		fmt.Fprintf(&s, "\n📅 %s", d)
+	}
+	s.WriteString("\n\nSalah nominal? Ketik /batal")
+	return s.String()
+}
+
+func formatAddedMany(saved []ledger.Tx, failed []string, today time.Time) string {
+	var s strings.Builder
+	fmt.Fprintf(&s, "✅ <b>%d catatan disimpan</b>\n", len(saved))
+	var in, out int64
+	for _, tx := range saved {
+		line := formatLine(tx)
+		if d := dayLabel(tx.CreatedAt, today); d != "" {
+			line += " <i>(" + d + ")</i>"
+		}
+		s.WriteString("\n" + line)
+		if tx.Kind == ledger.Income {
+			in += tx.Amount
+		} else {
+			out += tx.Amount
+		}
+	}
+	s.WriteString("\n")
+	if out > 0 {
+		fmt.Fprintf(&s, "\nTotal keluar: <b>%s</b>", ledger.Rupiah(out))
+	}
+	if in > 0 {
+		fmt.Fprintf(&s, "\nTotal masuk: <b>%s</b>", ledger.Rupiah(in))
+	}
+	if len(failed) > 0 {
+		s.WriteString("\n\nYang nggak kecatat:\n• " + strings.Join(failed, "\n• "))
+	}
 	return s.String()
 }
 

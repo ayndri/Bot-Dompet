@@ -58,29 +58,63 @@ func scanTx(row scanner) (ledger.Tx, error) {
 
 const txColumns = "id, kind, amount, category, note, created_at"
 
-// Add menyimpan transaksi. Kalau update yang sama datang lagi (Telegram
-// mengirim ulang saat webhook lambat), hasilnya ledger.ErrDuplicate.
-func (s *Store) Add(ctx context.Context, chatID, updateID int64, e ledger.Entry) (ledger.Tx, error) {
-	tx := ledger.Tx{Entry: e}
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO transactions (chat_id, update_id, kind, amount, category, note)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (chat_id, update_id) DO NOTHING
-		RETURNING id, created_at`,
-		chatID, updateID, string(e.Kind), e.Amount, e.Category, e.Note,
-	).Scan(&tx.ID, &tx.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return tx, ledger.ErrDuplicate
+// Add menyimpan beberapa transaksi dari satu pesan sekaligus, semuanya atau
+// tidak sama sekali. CreatedAt tiap Tx dipakai sebagai waktu transaksi.
+// Kalau update yang sama datang lagi (Telegram mengirim ulang saat webhook
+// lambat), hasilnya ledger.ErrDuplicate.
+func (s *Store) Add(ctx context.Context, chatID, updateID int64, txs []ledger.Tx) ([]ledger.Tx, error) {
+	dbtx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return tx, err
+	defer dbtx.Rollback(ctx)
+
+	saved := make([]ledger.Tx, 0, len(txs))
+	for i, tx := range txs {
+		err := dbtx.QueryRow(ctx, `
+			INSERT INTO transactions (chat_id, update_id, line, kind, amount, category, note, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			ON CONFLICT (chat_id, update_id, line) DO NOTHING
+			RETURNING id`,
+			chatID, updateID, i, string(tx.Kind), tx.Amount, tx.Category, tx.Note, tx.CreatedAt,
+		).Scan(&tx.ID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ledger.ErrDuplicate
+		}
+		if err != nil {
+			return nil, err
+		}
+		saved = append(saved, tx)
+	}
+	return saved, dbtx.Commit(ctx)
 }
 
-// DeleteLast menghapus transaksi terakhir milik chat. ok=false kalau kosong.
+func (s *Store) GetTx(ctx context.Context, chatID, id int64) (ledger.Tx, bool, error) {
+	tx, err := scanTx(s.pool.QueryRow(ctx, `
+		SELECT `+txColumns+` FROM transactions WHERE chat_id = $1 AND id = $2`, chatID, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return tx, false, nil
+	}
+	return tx, err == nil, err
+}
+
+func (s *Store) SetCategory(ctx context.Context, chatID, id int64, category string) (ledger.Tx, bool, error) {
+	tx, err := scanTx(s.pool.QueryRow(ctx, `
+		UPDATE transactions SET category = $3 WHERE chat_id = $1 AND id = $2
+		RETURNING `+txColumns, chatID, id, category))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return tx, false, nil
+	}
+	return tx, err == nil, err
+}
+
+// DeleteLast menghapus transaksi yang terakhir diketik (bukan yang tanggalnya
+// paling baru, karena catatan bisa bertanggal mundur). ok=false kalau kosong.
 func (s *Store) DeleteLast(ctx context.Context, chatID int64) (ledger.Tx, bool, error) {
 	tx, err := scanTx(s.pool.QueryRow(ctx, `
 		DELETE FROM transactions WHERE id = (
 			SELECT id FROM transactions WHERE chat_id = $1
-			ORDER BY created_at DESC, id DESC LIMIT 1
+			ORDER BY id DESC LIMIT 1
 		)
 		RETURNING `+txColumns, chatID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -114,7 +148,7 @@ func (s *Store) Recent(ctx context.Context, chatID int64, limit int) ([]ledger.T
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+txColumns+` FROM transactions
 		WHERE chat_id = $1
-		ORDER BY created_at DESC, id DESC LIMIT $2`, chatID, limit)
+		ORDER BY id DESC LIMIT $2`, chatID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -138,4 +172,58 @@ func (s *Store) Balance(ctx context.Context, chatID int64) (int64, error) {
 		SELECT COALESCE(SUM(CASE WHEN kind = 'in' THEN amount ELSE -amount END), 0)::bigint
 		FROM transactions WHERE chat_id = $1`, chatID).Scan(&v)
 	return v, err
+}
+
+func (s *Store) LearnRule(ctx context.Context, chatID int64, kind ledger.Kind, keyword, category string) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO category_rules (chat_id, kind, keyword, category) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (chat_id, kind, keyword) DO UPDATE SET category = EXCLUDED.category`,
+		chatID, string(kind), keyword, category)
+	return err
+}
+
+func (s *Store) Rules(ctx context.Context, chatID int64) (ledger.Learned, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT kind, keyword, category FROM category_rules WHERE chat_id = $1`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	learned := ledger.Learned{}
+	for rows.Next() {
+		var kind, keyword, category string
+		if err := rows.Scan(&kind, &keyword, &category); err != nil {
+			return nil, err
+		}
+		k := ledger.Kind(kind)
+		if learned[k] == nil {
+			learned[k] = map[string]string{}
+		}
+		learned[k][keyword] = category
+	}
+	return learned, rows.Err()
+}
+
+func (s *Store) SetBudget(ctx context.Context, chatID int64, b ledger.Budget) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO budgets (chat_id, category, amount) VALUES ($1, $2, $3)
+		ON CONFLICT (chat_id, category) DO UPDATE SET amount = EXCLUDED.amount`,
+		chatID, b.Category, b.Amount)
+	return err
+}
+
+func (s *Store) DeleteBudget(ctx context.Context, chatID int64, category string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM budgets WHERE chat_id = $1 AND category = $2`, chatID, category)
+	return tag.RowsAffected() > 0, err
+}
+
+func (s *Store) Budgets(ctx context.Context, chatID int64) ([]ledger.Budget, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT category, amount FROM budgets WHERE chat_id = $1 ORDER BY category`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[ledger.Budget])
 }

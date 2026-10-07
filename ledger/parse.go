@@ -123,3 +123,9 @@ func parseScaled(s string, mult int64) (int64, bool) {
 	}
 	return v, true
 }
+
+// ParseAmount membaca satu token nominal seperti "300rb" atau "1.500.000".
+func ParseAmount(tok string) (int64, bool) {
+	v, _, ok := parseAmount(tok)
+	return v, ok
+}
